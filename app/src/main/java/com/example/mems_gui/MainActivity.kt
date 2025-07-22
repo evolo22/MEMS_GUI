@@ -45,47 +45,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-object BluetoothHelper {
-    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
-    private var bluetoothSocket: BluetoothSocket? = null
-    private val TAG = "BluetoothHelper"
-
-    private val UUID_SERIAL_PORT: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-
-    fun isBluetoothSupported(): Boolean = bluetoothAdapter != null
-
-    fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
-
-    fun enableBluetooth(activity: Activity, requestCode: Int) {
-        val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-        activity.startActivityForResult(enableBtIntent, requestCode)
-    }
-
-    fun getPairedDevices(): Set<BluetoothDevice>? {
-        return bluetoothAdapter?.bondedDevices
-    }
-
-    fun connectToDevice(device: BluetoothDevice): Boolean {
-        try {
-            bluetoothSocket = device.createRfcommSocketToServiceRecord(UUID_SERIAL_PORT)
-            bluetoothSocket?.connect()
-            Log.d(TAG, "Connected to device")
-            return true
-        } catch (e: IOException) {
-            Log.e(TAG, "Connection failed", e)
-            return false
-        }
-    }
-
-    fun sendData(data: String) {
-        bluetoothSocket?.outputStream?.write(data.toByteArray())
-    }
-
-    fun disconnect() {
-        bluetoothSocket?.close()
-    }
-}
-
 @OptIn(ExperimentalPagerApi::class)
 @Composable
 fun TwoPageSwipeUI() {
@@ -100,41 +59,6 @@ fun TwoPageSwipeUI() {
             0 -> ConnectScreen()
             1 -> GraphScreen()
         }
-    }
-}
-
-
-fun connectToArduino(activity: Activity)
-{
-    if (!BluetoothHelper.isBluetoothSupported()) {
-        Log.e("Connect", "Bluetooth not supported.")
-        return
-    }
-
-    if (!BluetoothHelper.isBluetoothEnabled()) {
-        BluetoothHelper.enableBluetooth(activity, 1)
-        return
-    }
-
-    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_CONNECT)
-        != PackageManager.PERMISSION_GRANTED
-    ) {
-        ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 100)
-        return
-    }
-
-    val devices = BluetoothHelper.getPairedDevices()
-    val arduinoDevice = devices?.find { it.name == "Your_Arduino_Name" }
-
-    if (arduinoDevice != null) {
-        val connected = BluetoothHelper.connectToDevice(arduinoDevice)
-        if (connected) {
-            Log.d("Connect", "Successfully connected to Arduino.")
-        } else {
-            Log.e("Connect", "Failed to connect.")
-        }
-    } else {
-        Log.e("Connect", "Arduino device not found.")
     }
 }
 
@@ -165,14 +89,10 @@ fun ConnectScreen() {
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(onClick = {
-                connectToArduino(context as Activity)
+                ""
             }) {
                 Text("Connect")
             }
-            Text(
-                //
-                text = "Added text"
-            )
         }
     }
 }
@@ -202,12 +122,6 @@ fun GraphScreen() {
                 style = MaterialTheme.typography.headlineMedium,
                 color = Color.White
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {
-                // TODO: Add graph display logic here
-            }) {
-                Text("Connect")
-            }
         }
     }
 }
