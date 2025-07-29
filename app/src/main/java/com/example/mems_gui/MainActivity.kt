@@ -1,11 +1,8 @@
 package com.example.mems_gui
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.content.Context
-import android.content.Intent
+import android.bluetooth.*
+import android.content.*
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -15,9 +12,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -29,14 +31,12 @@ import com.example.mems_gui.ui.theme.MEMS_GUITheme
 import com.google.accompanist.pager.ExperimentalPagerApi
 import com.google.accompanist.pager.HorizontalPager
 import com.google.accompanist.pager.rememberPagerState
-import android.content.BroadcastReceiver
-import android.content.IntentFilter
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var bluetoothAdapter: BluetoothAdapter
 
-    // Mutable states for permissions and Bluetooth status
     private var allPermissionsGranted by mutableStateOf(false)
     private var isBluetoothEnabled by mutableStateOf(false)
 
@@ -51,7 +51,6 @@ class MainActivity : ComponentActivity() {
 
         if (bluetoothAdapter == null) {
             Log.e("Bluetooth", "Device does not support Bluetooth.")
-            // Disable Bluetooth functionality or show message as needed
             return
         }
 
@@ -60,19 +59,12 @@ class MainActivity : ComponentActivity() {
         permissionLauncher =
             registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
                 allPermissionsGranted = permissions.all { it.value }
-                Log.d("Permissions", "Permissions result: $permissions, All granted: $allPermissionsGranted")
                 checkBluetoothAndScanReadiness()
             }
 
         enableBluetoothLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-                if (result.resultCode == RESULT_OK) {
-                    isBluetoothEnabled = bluetoothAdapter.isEnabled
-                    Log.d("Bluetooth", "Bluetooth enabled by user.")
-                } else {
-                    isBluetoothEnabled = false
-                    Log.w("Bluetooth", "Bluetooth not enabled by user or action cancelled.")
-                }
+                isBluetoothEnabled = result.resultCode == RESULT_OK
                 checkBluetoothAndScanReadiness()
             }
 
@@ -80,16 +72,16 @@ class MainActivity : ComponentActivity() {
             MEMS_GUITheme {
                 val context = this
                 val deviceTextState = remember { mutableStateOf("") }
+                val discoveredDevices = remember { mutableStateListOf<BluetoothDevice>() }
+                val selectedDevice = remember { mutableStateOf<BluetoothDevice?>(null) }
 
                 LaunchedEffect(Unit) {
                     checkBluetoothAndScanReadiness()
                 }
 
                 LaunchedEffect(allPermissionsGranted, isBluetoothEnabled) {
-                    Log.d("AppFlow", "Permissions granted: $allPermissionsGranted, Bluetooth enabled: $isBluetoothEnabled")
                     if (allPermissionsGranted && isBluetoothEnabled) {
-                        Log.d("AppFlow", "All conditions met. Discovering devices...")
-                        discoverNearbyDevices(context, bluetoothAdapter, deviceTextState)
+                        discoverNearbyDevices(context, bluetoothAdapter, deviceTextState, discoveredDevices)
                     } else {
                         val statusMessages = mutableListOf<String>()
                         if (!allPermissionsGranted) statusMessages.add("Permissions not granted.")
@@ -98,23 +90,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                TwoPageSwipeUI(deviceTextState, bluetoothAdapter)
+                TwoPageSwipeUI(deviceTextState, bluetoothAdapter, discoveredDevices, selectedDevice)
             }
         }
     }
 
     private fun checkBluetoothAndScanReadiness() {
         val neededPermissions = mutableListOf<String>()
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 neededPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
                 neededPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
-                neededPermissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
             }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 neededPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -126,14 +114,10 @@ class MainActivity : ComponentActivity() {
         }
 
         if (neededPermissions.isNotEmpty()) {
-            Log.d("Permissions", "Requesting permissions: $neededPermissions")
             permissionLauncher.launch(neededPermissions.toTypedArray())
         } else {
             allPermissionsGranted = true
-            Log.d("Permissions", "All required permissions granted.")
-
             if (!bluetoothAdapter.isEnabled) {
-                Log.d("Bluetooth", "Bluetooth not enabled, requesting enablement.")
                 val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
                 enableBluetoothLauncher.launch(enableBtIntent)
             } else {
@@ -141,129 +125,46 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    // This method was outside your class - moved inside and cleaned up
-    private fun askForConnectivity() {
-        val neededPermissions = mutableListOf<String>()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                neededPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                neededPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            }
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                neededPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                neededPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            }
-        }
-
-        if (neededPermissions.isNotEmpty()) {
-            Log.d("Permissions", "Requesting permissions: $neededPermissions")
-            permissionLauncher.launch(neededPermissions.toTypedArray())
-        } else {
-            allPermissionsGranted = true
-            Log.d("Permissions", "All required permissions already granted")
-        }
-
-        if (!bluetoothAdapter.isEnabled) {
-            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(enableIntent)
-        }
-    }
 }
 
-// Other functions remain largely unchanged but with minor cleanups:
-
-fun queueAvailableDevices(
-    context: Context,
-    bluetoothAdapter: BluetoothAdapter,
-    textState: MutableState<String>
-) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-    ) {
-        textState.value = "Permission required to access Bluetooth devices"
-        return
-    }
-
-    val pairedDevices: Set<BluetoothDevice> = bluetoothAdapter.bondedDevices
-
-    val deviceList = if (pairedDevices.isEmpty()) {
-        "No paired devices found"
-    } else {
-        pairedDevices.joinToString(separator = "\n") { device -> device.name ?: "Unnamed Device" }
-    }
-
-    Log.d("Text State", "Device list set to:\n$deviceList")
-    textState.value = deviceList
-}
+// === NEWLY UPDATED BLUETOOTH FUNCTIONS ===
 
 fun discoverNearbyDevices(
     context: Context,
     bluetoothAdapter: BluetoothAdapter,
-    textState: MutableState<String>
+    textState: MutableState<String>,
+    discoveredDevices: MutableList<BluetoothDevice>
 ) {
-    val discoveredDevices = mutableSetOf<String>()
+    discoveredDevices.clear()
 
     val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
             when (intent?.action) {
                 BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
-                    Log.d("BluetoothScan", "Discovery started")
                     textState.value = "Scanning nearby devices..."
                 }
+
                 BluetoothDevice.ACTION_FOUND -> {
-                    val device: BluetoothDevice? =
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    device?.let {
-                        if (context != null &&
-                            ActivityCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            val name = it.name?.takeIf { n -> n.isNotBlank() } ?: "Unnamed Device"
-                            val address = it.address
-                            val entry = "$name "
-                            if (discoveredDevices.add(entry)) {
-                                Log.d("BluetoothScan", "Device found: $entry")
-                                textState.value = "Scanning nearby devices...\n" + discoveredDevices.joinToString("\n")
-                            }
-                        } else {
-                            Log.w("Bluetooth", "Missing BLUETOOTH_CONNECT permission during discovery")
+                    val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    if (device != null &&
+                        ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        if (!discoveredDevices.contains(device)) {
+                            discoveredDevices.add(device)
                         }
                     }
                 }
+
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    Log.d("BluetoothScan", "Discovery finished")
-                    if (context != null) {
-                        context.unregisterReceiver(this)
-                    }
+                    context.unregisterReceiver(this)
                     if (discoveredDevices.isEmpty()) {
                         textState.value = "No nearby devices found"
                     } else {
-                        textState.value = "Scan complete:\n" + discoveredDevices.joinToString("\n")
+                        textState.value = "Scan complete. Select a device to connect."
                     }
                 }
             }
         }
-    }
-
-    val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-    } else {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    }
-
-    if (!hasScanPermission) {
-        textState.value = "Missing BLUETOOTH_SCAN or ACCESS_FINE_LOCATION permission for discovery."
-        Log.e("BluetoothScan", "Failed to start discovery: Missing required scan permission.")
-        return
     }
 
     val filter = IntentFilter().apply {
@@ -273,38 +174,65 @@ fun discoverNearbyDevices(
     }
     context.registerReceiver(receiver, filter)
 
-    if (bluetoothAdapter.isDiscovering) {
-        Log.d("BluetoothScan", "Discovery already in progress, cancelling existing discovery.")
-        bluetoothAdapter.cancelDiscovery()
-    }
-
-    if (!bluetoothAdapter.isEnabled) {
-        textState.value = "Bluetooth is not enabled."
-        Log.e("BluetoothScan", "Failed to start discovery: Bluetooth is not enabled.")
-        return
-    }
-
-    val started = bluetoothAdapter.startDiscovery()
-
-    if (started) {
-        Log.d("BluetoothScan", "Discovery started successfully")
-    } else {
-        Log.e(
-            "BluetoothScan",
-            "Failed to start discovery. " +
-                    "Bluetooth enabled: ${bluetoothAdapter.isEnabled}, " +
-                    "Permissions granted: $hasScanPermission. " +
-                    "Possible reasons: Adapter busy, device not ready, or a deeper system issue."
-        )
-        textState.value = "Failed to start discovery. Check logs."
-    }
+    if (bluetoothAdapter.isDiscovering) bluetoothAdapter.cancelDiscovery()
+    bluetoothAdapter.startDiscovery()
 }
+
+fun connectToDevice(context: Context, device: BluetoothDevice) {
+    Thread {
+        try {
+            val deviceName = getSafeDeviceName(context, device)
+
+            // Cancel discovery safely
+            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val hasScan = ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_SCAN
+                ) == PackageManager.PERMISSION_GRANTED
+
+                val hasConnect = ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (hasScan && hasConnect) {
+                    if (bluetoothAdapter.isDiscovering) {
+                        bluetoothAdapter.cancelDiscovery()
+                    }
+                } else {
+                    Log.e("BluetoothConnect", "Missing required permissions: BLUETOOTH_SCAN or BLUETOOTH_CONNECT")
+                    return@Thread
+                }
+            } else {
+                if (bluetoothAdapter.isDiscovering) {
+                    bluetoothAdapter.cancelDiscovery()
+                }
+            }
+
+            // Reflection workaround for classic Bluetooth
+            val socket = device.javaClass
+                .getMethod("createRfcommSocket", Int::class.java)
+                .invoke(device, 1) as BluetoothSocket
+
+            socket.connect()
+
+            Log.d("BluetoothConnect", "Connected to $deviceName")
+        } catch (e: Exception) {
+            Log.e("BluetoothConnect", "Connection failed", e)
+        }
+    }.start()
+}
+
+
 
 @OptIn(ExperimentalPagerApi::class)
 @Composable
 fun TwoPageSwipeUI(
     deviceTextState: MutableState<String>,
-    bluetoothAdapter: BluetoothAdapter
+    bluetoothAdapter: BluetoothAdapter,
+    discoveredDevices: SnapshotStateList<BluetoothDevice>,
+    selectedDevice: MutableState<BluetoothDevice?>
 ) {
     val pagerState = rememberPagerState()
 
@@ -314,16 +242,35 @@ fun TwoPageSwipeUI(
         modifier = Modifier.fillMaxSize()
     ) { page ->
         when (page) {
-            0 -> ConnectScreen(deviceTextState, bluetoothAdapter)
+            0 -> ConnectScreen(deviceTextState, bluetoothAdapter, discoveredDevices, selectedDevice)
             1 -> GraphScreen()
         }
+    }
+}
+
+
+fun getSafeDeviceName(context: Context, device: BluetoothDevice): String {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            device.name ?: "Unnamed Device"
+        } else {
+            "Unknown Device (No Permission)"
+        }
+    } else {
+        device.name ?: "Unnamed Device"
     }
 }
 
 @Composable
 fun ConnectScreen(
     textState: MutableState<String>,
-    bluetoothAdapter: BluetoothAdapter?
+    bluetoothAdapter: BluetoothAdapter?,
+    discoveredDevices: SnapshotStateList<BluetoothDevice>,
+    selectedDevice: MutableState<BluetoothDevice?>
 ) {
     val context = LocalContext.current
 
@@ -341,7 +288,7 @@ fun ConnectScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(24.dp),
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
             Text(
                 text = "Connect to Arduino",
@@ -350,18 +297,36 @@ fun ConnectScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            TextField(
-                value = textState.value,
-                enabled = false,
-                onValueChange = { newText -> textState.value = newText },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Detected Devices") }
-            )
+            Text(textState.value, color = Color.White)
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(discoveredDevices) { device ->
+                    val deviceName = getSafeDeviceName(context, device)
+                    val isSelected = selectedDevice.value == device
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedDevice.value = device }
+                            .background(if (isSelected) Color.DarkGray else Color.Transparent)
+                            .padding(12.dp)
+                    ) {
+                        Text(text = deviceName, color = Color.White)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             Button(onClick = {
-                // Add your Bluetooth connection logic here
+                selectedDevice.value?.let {
+                    connectToDevice(context, it)
+                    textState.value = "Attempting connection to ${getSafeDeviceName(context, it)}"
+                } ?: run {
+                    textState.value = "Please select a device first."
+                }
             }) {
                 Text("Connect")
             }
@@ -369,41 +334,8 @@ fun ConnectScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Button(onClick = {
-                val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-                    putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
-                }
-                context.startActivity(discoverableIntent)
-            }) {
-                Text("Make Device Discoverable")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(onClick = {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                        textState.value = "Requesting Bluetooth scan permission..."
-                        ActivityCompat.requestPermissions(
-                            context as ComponentActivity,
-                            arrayOf(Manifest.permission.BLUETOOTH_SCAN),
-                            100
-                        )
-                        return@Button
-                    }
-                } else {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                        textState.value = "Requesting location permission..."
-                        ActivityCompat.requestPermissions(
-                            context as ComponentActivity,
-                            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
-                            101
-                        )
-                        return@Button
-                    }
-                }
-
                 bluetoothAdapter?.let {
-                    discoverNearbyDevices(context, it, textState)
+                    discoverNearbyDevices(context, it, textState, discoveredDevices)
                 }
             }) {
                 Text("Scan Again")
@@ -438,18 +370,5 @@ fun GraphScreen() {
         }
     }
 }
-
-//@Preview(showBackground = true)
-//@Composable
-//fun PreviewConnectScreen() {
-//    val dummyState = remember { mutableStateOf("Preview Device") }
-//    ConnectScreen(dummyState, null)
-//}
-//
-//@Preview(showBackground = true)
-//@Composable
-//fun PreviewGraphScreen() {
-//    GraphScreen()
-//}
 
 
