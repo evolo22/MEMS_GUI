@@ -150,8 +150,7 @@ fun discoverNearbyDevicesBLE(
     ) == PackageManager.PERMISSION_GRANTED
 
     if (!hasScanPermission || !hasConnectPermission || !hasLocationPermission) {
-        textState.value = "Missing BLE permissions! Please grant and try again."
-        // You should trigger the permission request flow in your Activity/Compose logic.
+        textState.value = "Missing BLE permissions"
         return
     }
 
