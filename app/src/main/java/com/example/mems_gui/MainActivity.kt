@@ -2,16 +2,17 @@ package com.example.mems_gui
 
 import android.Manifest
 import android.bluetooth.*
+import android.bluetooth.le.*
 import android.content.*
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
+import android.os.*
 import android.util.Log
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,7 +32,7 @@ import com.example.mems_gui.ui.theme.MEMS_GUITheme
 import com.google.accompanist.pager.ExperimentalPagerApi
 import com.google.accompanist.pager.HorizontalPager
 import com.google.accompanist.pager.rememberPagerState
-import java.util.UUID
+import java.util.*
 
 class MainActivity : ComponentActivity() {
 
@@ -81,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(allPermissionsGranted, isBluetoothEnabled) {
                     if (allPermissionsGranted && isBluetoothEnabled) {
-                        discoverNearbyDevices(context, bluetoothAdapter, deviceTextState, discoveredDevices)
+                        discoverNearbyDevicesBLE(context, bluetoothAdapter, deviceTextState, discoveredDevices)
                     } else {
                         val statusMessages = mutableListOf<String>()
                         if (!allPermissionsGranted) statusMessages.add("Permissions not granted.")
@@ -127,104 +128,101 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// === NEWLY UPDATED BLUETOOTH FUNCTIONS ===
-
-fun discoverNearbyDevices(
+fun discoverNearbyDevicesBLE(
     context: Context,
     bluetoothAdapter: BluetoothAdapter,
     textState: MutableState<String>,
     discoveredDevices: MutableList<BluetoothDevice>
 ) {
+    val scanner = bluetoothAdapter.bluetoothLeScanner
+
+    // Check permissions first
+    val hasScanPermission = ActivityCompat.checkSelfPermission(
+        context, Manifest.permission.BLUETOOTH_SCAN
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val hasConnectPermission = ActivityCompat.checkSelfPermission(
+        context, Manifest.permission.BLUETOOTH_CONNECT
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val hasLocationPermission = ActivityCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    if (!hasScanPermission || !hasConnectPermission || !hasLocationPermission) {
+        textState.value = "Missing BLE permissions! Please grant and try again."
+        // You should trigger the permission request flow in your Activity/Compose logic.
+        return
+    }
+
     discoveredDevices.clear()
 
-    val receiver = object : BroadcastReceiver() {
-        override fun onReceive(ctx: Context?, intent: Intent?) {
-            when (intent?.action) {
-                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
-                    textState.value = "Scanning nearby devices..."
+    val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            result?.device?.let { device ->
+                if (!discoveredDevices.contains(device)) {
+                    discoveredDevices.add(device)
                 }
+            }
+        }
 
-                BluetoothDevice.ACTION_FOUND -> {
-                    val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                    if (device != null &&
-                        ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-                    ) {
-                        if (!discoveredDevices.contains(device)) {
-                            discoveredDevices.add(device)
-                        }
-                    }
-                }
+        override fun onScanFailed(errorCode: Int) {
+            textState.value = "BLE Scan failed with error: $errorCode"
+        }
+    }
 
-                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    context.unregisterReceiver(this)
-                    if (discoveredDevices.isEmpty()) {
-                        textState.value = "No nearby devices found"
-                    } else {
-                        textState.value = "Scan complete. Select a device to connect."
+    val scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+    textState.value = "Scanning BLE devices..."
+    scanner.startScan(null, scanSettings, scanCallback)
+
+    Handler(Looper.getMainLooper()).postDelayed({
+        scanner.stopScan(scanCallback)
+        if (discoveredDevices.isEmpty()) {
+            textState.value = "No BLE devices found."
+        } else {
+            textState.value = "BLE scan complete. Select a device."
+        }
+    }, 30000)
+}
+
+
+fun connectToBLEDevice(context: Context, device: BluetoothDevice) {
+    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        Log.e("BLE", "Missing BLUETOOTH_CONNECT permission. Cannot connect.")
+        // Optionally update UI to request permission from user here
+        return
+    }
+
+    val gattCallback = object : BluetoothGattCallback() {
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.d("BLE", "Connected to GATT server.")
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.d("BLE", "Disconnected from GATT server.")
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                for (service in gatt.services) {
+                    Log.d("BLE", "Service: ${service.uuid}")
+                    for (char in service.characteristics) {
+                        Log.d("BLE", "Characteristic: ${char.uuid}")
                     }
                 }
             }
         }
     }
 
-    val filter = IntentFilter().apply {
-        addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
-        addAction(BluetoothDevice.ACTION_FOUND)
-        addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        Log.e("BLE", "Missing BLUETOOTH_CONNECT permission.")
+        return
     }
-    context.registerReceiver(receiver, filter)
 
-    if (bluetoothAdapter.isDiscovering) bluetoothAdapter.cancelDiscovery()
-    bluetoothAdapter.startDiscovery()
+    device.connectGatt(context, false, gattCallback)
 }
-
-fun connectToDevice(context: Context, device: BluetoothDevice) {
-    Thread {
-        try {
-            val deviceName = getSafeDeviceName(context, device)
-
-            // Cancel discovery safely
-            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val hasScan = ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_SCAN
-                ) == PackageManager.PERMISSION_GRANTED
-
-                val hasConnect = ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-
-                if (hasScan && hasConnect) {
-                    if (bluetoothAdapter.isDiscovering) {
-                        bluetoothAdapter.cancelDiscovery()
-                    }
-                } else {
-                    Log.e("BluetoothConnect", "Missing required permissions: BLUETOOTH_SCAN or BLUETOOTH_CONNECT")
-                    return@Thread
-                }
-            } else {
-                if (bluetoothAdapter.isDiscovering) {
-                    bluetoothAdapter.cancelDiscovery()
-                }
-            }
-
-            // Reflection workaround for classic Bluetooth
-            val socket = device.javaClass
-                .getMethod("createRfcommSocket", Int::class.java)
-                .invoke(device, 1) as BluetoothSocket
-
-            socket.connect()
-
-            Log.d("BluetoothConnect", "Connected to $deviceName")
-        } catch (e: Exception) {
-            Log.e("BluetoothConnect", "Connection failed", e)
-        }
-    }.start()
-}
-
-
 
 @OptIn(ExperimentalPagerApi::class)
 @Composable
@@ -248,20 +246,20 @@ fun TwoPageSwipeUI(
     }
 }
 
-
-fun getSafeDeviceName(context: Context, device: BluetoothDevice): String {
+fun getSafeDeviceName(context: Context, device: BluetoothDevice?): String {
+    if (device == null) return "Unnamed Device"
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (ActivityCompat.checkSelfPermission(
                 context,
                 Manifest.permission.BLUETOOTH_CONNECT
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            device.name ?: "Unnamed Device"
+            device.name?.takeIf { it.isNotBlank() } ?: "Unnamed Device"
         } else {
             "Unknown Device (No Permission)"
         }
     } else {
-        device.name ?: "Unnamed Device"
+        device.name?.takeIf { it.isNotBlank() } ?: "Unnamed Device"
     }
 }
 
@@ -290,22 +288,16 @@ fun ConnectScreen(
                 .padding(24.dp),
             verticalArrangement = Arrangement.Top
         ) {
-            Text(
-                text = "Connect to Arduino",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White
-            )
+            Text("Connect to Arduino", style = MaterialTheme.typography.headlineMedium, color = Color.White)
             Spacer(modifier = Modifier.height(16.dp))
-
             Text(textState.value, color = Color.White)
-
             Spacer(modifier = Modifier.height(12.dp))
 
             LazyColumn(modifier = Modifier.weight(1f)) {
                 items(discoveredDevices) { device ->
+                    val context = LocalContext.current
                     val deviceName = getSafeDeviceName(context, device)
                     val isSelected = selectedDevice.value == device
-
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -313,7 +305,7 @@ fun ConnectScreen(
                             .background(if (isSelected) Color.DarkGray else Color.Transparent)
                             .padding(12.dp)
                     ) {
-                        Text(text = deviceName, color = Color.White)
+                        Text(deviceName, color = Color.White)
                     }
                 }
             }
@@ -322,8 +314,8 @@ fun ConnectScreen(
 
             Button(onClick = {
                 selectedDevice.value?.let {
-                    connectToDevice(context, it)
-                    textState.value = "Attempting connection to ${getSafeDeviceName(context, it)}"
+                    connectToBLEDevice(context, it)
+                    textState.value = "Connecting to ${getSafeDeviceName(context, it)}"
                 } ?: run {
                     textState.value = "Please select a device first."
                 }
@@ -335,7 +327,7 @@ fun ConnectScreen(
 
             Button(onClick = {
                 bluetoothAdapter?.let {
-                    discoverNearbyDevices(context, it, textState, discoveredDevices)
+                    discoverNearbyDevicesBLE(context, it, textState, discoveredDevices)
                 }
             }) {
                 Text("Scan Again")
@@ -362,11 +354,7 @@ fun GraphScreen() {
                 .padding(24.dp),
             verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = "Display",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White
-            )
+            Text("Display", style = MaterialTheme.typography.headlineMedium, color = Color.White)
         }
     }
 }
