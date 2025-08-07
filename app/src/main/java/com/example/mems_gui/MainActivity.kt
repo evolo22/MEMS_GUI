@@ -314,7 +314,7 @@ fun getSafeDeviceName(context: Context, device: BluetoothDevice?): String {
         ) {
             device.name ?: ""
         } else {
-            "Unknown Device (No Permission)"
+            "Unknown Device"
         }
     } else {
         device.name ?: ""
